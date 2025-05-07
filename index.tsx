@@ -1,44 +1,32 @@
 import { Plugin } from "@utils/types";
 import { findByProps } from "@webpack";
 import { React } from "@webpack/common";
-import Logger from "./Logger"; 
-
-
-interface UploadModuleOptions {
-    file: File;
-    channelId: string;
-    showsAttachmentOptions?: boolean;
-}
-
-console.log("[VideoComp] Plugin initializing...");
+import Logger from "./Logger";
 
 export default {
     name: "VideoComp",
     description: "Adds a button to compress and upload videos under 10MB",
-    authors: [{ name: "diego.ffm320"}],
+    authors: [{ name: "diego.ffm320" }],
     observer: null as MutationObserver | null,
     intervalId: null as NodeJS.Timeout | null,
     buttonInjected: false,
-    debugMode: true,
-    lastChannelId: null as string | null, // Add this to track the last active channel
+    lastChannelId: null as string | null,
+    logger: new Logger("VideoComp"),
 
     log(...args: any[]) {
-        if (this.debugMode) {
-            console.log(`[${this.name}]`, ...args);
-        }
+        console.log(`[${this.name}]`, ...args);
     },
-    // Plugin lifecycle methods
+
     start() {
-        Logger.log("Starting plugin...");
+        this.log("Starting plugin...");
         this.tryInjectButton();
 
         this.intervalId = setInterval(() => {
-            // Check if channel changed
             const currentChannelId = this.getCurrentChannelId();
             if (currentChannelId !== this.lastChannelId) {
                 this.log(`Channel changed: ${this.lastChannelId} -> ${currentChannelId}`);
                 this.lastChannelId = currentChannelId;
-                this.buttonInjected = false; // Reset the flag when channel changes
+                this.buttonInjected = false;
             }
             
             if (!this.buttonInjected) {
@@ -47,7 +35,6 @@ export default {
         }, 1000);
 
         this.observer = new MutationObserver((mutations) => {
-            // Only try to inject if we detect relevant UI changes (not on every mutation)
             for (const mutation of mutations) {
                 if (mutation.target && 
                    (mutation.target.className?.includes?.('buttons__74017') ||
@@ -55,7 +42,6 @@ export default {
                     mutation.target.className?.includes?.('toolbar') || 
                     mutation.target.className?.includes?.('attach'))) {
                     
-                    // Check if button is still present
                     if (!document.getElementById("video-comp-btn")) {
                         this.buttonInjected = false;
                     }
@@ -76,32 +62,32 @@ export default {
         });
     },
 
+    stop() {
+        if (this.intervalId) clearInterval(this.intervalId);
+        if (this.observer) this.observer.disconnect();
+        this.removeButton();
+    },
+
     findButtonContainer(): Element | null {
-        // Try to find the standard Discord attachment button container
         const container = document.querySelector('[class^="buttons_"]') || 
                          document.querySelector('[class*=" buttons_"]') ||
-                         document.querySelector('.buttons-3JBrkn') || // Common Discord class
-                         document.querySelector('.attachButton-3JtTw3'); // Another common class
+                         document.querySelector('.buttons-3JBrkn') ||
+                         document.querySelector('.attachButton-3JtTw3');
         
         if (container) {
-            this.log("Found button container:", container);
             return container;
         }
         
-        // Fallback: Look for elements that contain attachment buttons
         const attachmentButtons = document.querySelectorAll('button[aria-label="Attach file"]');
         if (attachmentButtons.length > 0) {
-            // Find the parent that contains these buttons
             for (const btn of attachmentButtons) {
                 const parent = btn.closest('div');
                 if (parent) {
-                    this.log("Found container via attachment button:", parent);
                     return parent;
                 }
             }
         }
         
-        this.log("Could not find button container");
         return null;
     },
 
@@ -110,15 +96,11 @@ export default {
 
         const container = this.findButtonContainer();
         if (container) {
-            // Check if button already exists before injecting
             if (!document.getElementById("video-comp-btn")) {
                 this.injectButton(container);
             } else {
                 this.buttonInjected = true;
-                this.log("Button already exists, setting flag");
             }
-        } else {
-            this.log("No suitable container found.");
         }
     },
 
@@ -128,8 +110,7 @@ export default {
             return;
         }
     
-        this.log("Injecting button into:", container);
-        this.lastChannelId = this.getCurrentChannelId(); // Store channel ID when injecting
+        this.lastChannelId = this.getCurrentChannelId();
     
         const btn = document.createElement("div");
         btn.id = "video-comp-btn";
@@ -137,81 +118,35 @@ export default {
         btn.style.alignItems = "center";
     
         try {
-            // Improved React render method detection with fallbacks
-            let renderMethod = null;
-            
-            // Try to find React render methods through multiple approaches
+            const ButtonComponent = this.createCompressButtonComponent();
             const reactDOM = findByProps("render", "createRoot", "hydrate") || 
-                             findByProps("render", "hydrate") ||
-                             window.BdApi?.React?.DOM;
-            
-            // Use direct React DOM access if available in global scope
-            // This is useful in environments where webpack modules might be structured differently
-            const globalReactDOM = window.ReactDOM || window._?._reactDom || window.__REACT_DOM__;
-            
+                           findByProps("render", "hydrate");
+
             if (reactDOM?.createRoot) {
-                this.log("Using React 18 createRoot");
-                renderMethod = (component: React.ReactElement, container: Element) => {
-                    reactDOM.createRoot(container).render(component);
-                };
+                reactDOM.createRoot(btn).render(React.createElement(ButtonComponent));
             } else if (reactDOM?.render) {
-                this.log("Using React render");
-                renderMethod = (component: React.ReactElement, container: Element) => {
-                    reactDOM.render(component, container);
-                };
-            } else if (globalReactDOM?.render) {
-                this.log("Using global ReactDOM");
-                renderMethod = (component: React.ReactElement, container: Element) => {
-                    globalReactDOM.render(component, container);
-                };
-            } else if (window.BdApi?.React?.createElement && window.BdApi?.ReactDOM?.render) {
-                // BetterDiscord specific fallback
-                this.log("Using BdApi render methods");
-                renderMethod = (component: React.ReactElement, container: Element) => {
-                    window.BdApi.ReactDOM.render(component, container);
-                };
+                reactDOM.render(React.createElement(ButtonComponent), btn);
             } else {
-                // Last resort: try to render using basic DOM operations
-                this.log("No React render methods found, using DOM fallback");
-                const ButtonComponent = this.createCompressButtonComponent();
                 const instance = new ButtonComponent({});
-                
-                if (typeof instance.render === 'function') {
-                    // Create a button manually
-                    const manualBtn = document.createElement('button');
-                    manualBtn.textContent = "🎥";
-                    manualBtn.title = "Compress & upload video";
-                    manualBtn.style.background = "none";
-                    manualBtn.style.border = "none";
-                    manualBtn.style.color = "var(--interactive-normal)";
-                    manualBtn.style.padding = "8px";
-                    manualBtn.style.margin = "0 2px";
-                    manualBtn.style.borderRadius = "4px";
-                    manualBtn.style.cursor = "pointer";
-                    manualBtn.style.fontSize = "20px";
-                    manualBtn.style.height = "44px";
-                    manualBtn.style.width = "44px";
-                    
-                    manualBtn.addEventListener('click', instance.handleClick);
-                    btn.appendChild(manualBtn);
-                    container.prepend(btn);
-                    this.buttonInjected = true;
-                    this.log("Button injected using DOM fallback");
-                    return;
-                }
-                
-                throw new Error("Could not find any viable render method");
+                const manualBtn = document.createElement('button');
+                manualBtn.textContent = "🎥";
+                manualBtn.title = "Compress & upload video";
+                manualBtn.style.background = "none";
+                manualBtn.style.border = "none";
+                manualBtn.style.color = "var(--interactive-normal)";
+                manualBtn.style.padding = "8px";
+                manualBtn.style.margin = "0 2px";
+                manualBtn.style.borderRadius = "4px";
+                manualBtn.style.cursor = "pointer";
+                manualBtn.style.fontSize = "20px";
+                manualBtn.style.height = "44px";
+                manualBtn.style.width = "44px";
+                manualBtn.addEventListener('click', instance.handleClick);
+                btn.appendChild(manualBtn);
             }
     
-            const ButtonComponent = this.createCompressButtonComponent();
-            renderMethod(
-                React.createElement(ButtonComponent),
-                btn
-            );
-    
-            container.prepend(btn);
+            container.append(btn);
             this.buttonInjected = true;
-            this.log("Button injected successfully.");
         } catch (error) {
             console.error("[VideoComp] Failed to inject button:", error);
         }
@@ -226,7 +161,6 @@ export default {
                     unmountComponentAtNode(btn);
                 }
                 btn.remove();
-                this.log("Button removed.");
             } catch (error) {
                 console.error("[VideoComp] Error removing button:", error);
                 btn.remove();
@@ -235,20 +169,16 @@ export default {
     },
 
     getCurrentChannelId(): string | null {
-        // Method 1: From URL - this is the most reliable method
         const urlMatch = window.location.href.match(/channels\/\d+\/(\d+)/);
         if (urlMatch?.[1]) {
-            this.log(`Found channel ID from URL: ${urlMatch[1]}`);
             return urlMatch[1];
         }
         
-        // Fallback: Try from Discord's store only if URL method fails
         try {
             const channelStore = findByProps("getChannelId", "getLastSelectedChannelId");
             if (channelStore && typeof channelStore.getChannelId === "function") {
                 const channelId = channelStore.getChannelId();
                 if (channelId) {
-                    this.log(`Found channel ID from store: ${channelId}`);
                     return channelId;
                 }
             }
@@ -256,11 +186,9 @@ export default {
             this.log("Error getting channel from store:", err);
         }
 
-        this.log("Could not determine channel ID");
         return null;
     },
 
-    // Main component
     createCompressButtonComponent() {
         const plugin = this;
 
@@ -272,7 +200,6 @@ export default {
                 error: ""
             };
 
-            // Compression with proper error handling
             compressVideo(file: File): Promise<File> {
                 return new Promise((resolve, reject) => {
                     const video = document.createElement("video");
@@ -280,40 +207,33 @@ export default {
                     video.muted = true;
                     video.playsInline = true;
             
-                    // Error handlers
                     video.onerror = () => {
                         reject(new Error("Failed to load video file"));
                         URL.revokeObjectURL(video.src);
                     };
             
                     video.onloadedmetadata = () => {
-                        // Calculate dimensions - more aggressive downscaling for speed
-                        const targetWidth = 1920;  // 480p width
-                        const targetHeight = 720; // 480p height
+                        const targetWidth = 1080; // Fixed resolution
+                        const targetHeight = Math.floor((targetWidth / video.videoWidth) * video.videoHeight);
                         let width = video.videoWidth;
                         let height = video.videoHeight;
             
-                        // Maintain aspect ratio
                         const ratio = Math.min(targetWidth / width, targetHeight / height);
                         width = Math.floor(width * ratio);
                         height = Math.floor(height * ratio);
             
-                        plugin.log(`Original: ${video.videoWidth}x${video.videoHeight}, Compressed: ${width}x${height}`);
-            
-                        // Set up canvas
                         const canvas = document.createElement("canvas");
                         canvas.width = width;
                         canvas.height = height;
-                        const ctx = canvas.getContext("2d", { alpha: false }); // alpha: false for speed
+                        const ctx = canvas.getContext("2d", { alpha: false });
                         if (!ctx) {
                             reject(new Error("Could not get canvas context"));
                             return;
                         }
                         
-                        // Try different codecs and find what's supported
                         let mimeType = "";
                         const codecs = [
-                            "video/webm;codecs=vp9", // Prefer VP9 for better quality/size ratio
+                            "video/webm;codecs=vp9",
                             "video/webm;codecs=vp8",
                             "video/webm",
                             "video/mp4"
@@ -331,30 +251,15 @@ export default {
                             return;
                         }
             
-                        plugin.log(`Using codec: ${mimeType}`);
-            
-                        // Calculate optimal bitrate based on resolution - lower bitrate = faster encoding
-                        const pixelCount = width * height;
-                        const videoBitsPerSecond = Math.min(
-                            // Base bitrate on resolution - lower resolution = lower bitrate needed
-                            Math.max(500000, Math.floor(pixelCount * 0.2)),
-                            1500000 // Cap at 1.5 Mbps for Discord optimization
-                        );
-                        
-                        plugin.log(`Using bitrate: ${videoBitsPerSecond/1000}kbps`);
-            
-                        // Optimize playback rate for faster processing - speeds up compression
-                        const playbackRate = 1.5; // Process video faster
+                        const videoBitsPerSecond = 500000; // Fixed bitrate
+                        const playbackRate = 1.5;
                         video.playbackRate = playbackRate;
+                        const fps = 25;
                         
-                        // Lower framerate for faster processing
-                        const fps = 25; // Down from 30
-                        
-                        // Set up MediaRecorder with optimized settings
                         const stream = canvas.captureStream(fps);
                         const recorder = new MediaRecorder(stream, {
                             mimeType,
-                            videoBitsPerSecond // Reduced bitrate
+                            videoBitsPerSecond
                         });
             
                         const chunks: Blob[] = [];
@@ -389,12 +294,10 @@ export default {
                             reject(new Error(`MediaRecorder error: ${e}`));
                         };
             
-                        // Use larger chunks for fewer processing operations
-                        recorder.start(500); // Collect data every 500ms instead of 100ms
+                        recorder.start(500);
             
-                        // Optimize frame drawing for speed
                         let frameCount = 0;
-                        const frameSkip = 1; // Process every other frame
+                        const frameSkip = 1;
                         let animationFrameId: number;
                         
                         const drawFrame = () => {
@@ -405,7 +308,6 @@ export default {
                                     return;
                                 }
                                 
-                                // Skip frames for faster processing
                                 frameCount++;
                                 if (frameCount % frameSkip === 0) {
                                     ctx.drawImage(video, 0, 0, width, height);
@@ -418,14 +320,12 @@ export default {
                             }
                         };
             
-                        // Start playback
                         video.play().catch(err => {
                             reject(new Error(`Video play failed: ${err}`));
                         });
             
                         drawFrame();
             
-                        // Stop conditions
                         video.onended = () => {
                             cancelAnimationFrame(animationFrameId);
                             try {
@@ -437,10 +337,9 @@ export default {
                             }
                         };
             
-                        // Adaptive safety timeout
                         const safetyTimeout = Math.min(
-                            Math.max((video.duration / playbackRate) * 1000 * 1.2, 30000), // 1.2x adjusted playback time
-                            180000 // Max 3 minutes
+                            Math.max((video.duration / playbackRate) * 1000 * 1.2, 30000),
+                            180000
                         );
                         
                         setTimeout(() => {
@@ -457,10 +356,8 @@ export default {
                 });
             }
 
-            // Get Discord token safely - optimized to focus on what works
             getDiscordToken(): string | null {
                 try {
-                    // Access localStorage directly - this works as shown by your logs
                     if (window.localStorage) {
                         const token = window.localStorage.getItem('token');
                         if (token) {
@@ -468,7 +365,6 @@ export default {
                         }
                     }
                     
-                    // Backup methods
                     try {
                         const tokenModule = findByProps('getToken');
                         if (tokenModule && tokenModule.getToken && typeof tokenModule.getToken === 'function') {
@@ -479,7 +375,6 @@ export default {
                         plugin.log("Error getting token from modules:", e);
                     }
 
-                    // Check for token in meta tag - less common but can work
                     const metaToken = document.querySelector('meta[name="token"]');
                     if (metaToken) {
                         const token = metaToken.getAttribute('content');
@@ -492,12 +387,9 @@ export default {
                 return null;
             }
 
-            // Upload method - Direct XHR upload only (since this was the only successful method)
             async uploadToDiscord(file: File) {
                 const channelId = plugin.getCurrentChannelId();
                 if (!channelId) throw new Error("Couldn't determine channel ID");
-
-                plugin.log(`Attempting to upload to channel: ${channelId}`);
                 
                 this.setState({ currentMethod: "Uploading..." });
                 return this.tryDirectUpload(file, channelId);
@@ -511,35 +403,24 @@ export default {
                         return reject(new Error("No authentication token found"));
                     }
 
-                    plugin.log("Got token, attempting direct upload");
-
                     const formData = new FormData();
                     formData.append('file', file);
-                    formData.append('content', ''); // Empty message content
-                    
-                    // For proper Discord upload handling
-                    const filename = file.name;
-                    const fileType = file.type;
+                    formData.append('content', '');
                     
                     const xhr = new XMLHttpRequest();
                     xhr.open('POST', `https://discord.com/api/v9/channels/${channelId}/messages`);
                     xhr.setRequestHeader('Authorization', token);
-                    
-                    // Optional: Add user agent to mimic Discord client
                     xhr.setRequestHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
                     
                     xhr.onload = () => {
                         if (xhr.status >= 200 && xhr.status < 300) {
-                            plugin.log("Upload successful with status:", xhr.status);
                             resolve();
                         } else {
-                            plugin.log("Upload failed with status:", xhr.status, xhr.responseText);
                             reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.responseText}`));
                         }
                     };
 
                     xhr.onerror = () => {
-                        plugin.log("XHR error during upload");
                         reject(new Error("Network error during upload"));
                     };
                     
@@ -557,7 +438,6 @@ export default {
                 });
             }
 
-            // Main click handler - simplified for clarity
             handleClick = async () => {
                 if (this.state.isCompressing) return;
 
@@ -569,7 +449,6 @@ export default {
                 });
 
                 try {
-                    // File selection
                     const file = await new Promise<File | null>((resolve) => {
                         const input = document.createElement("input");
                         input.type = "file";
@@ -586,17 +465,13 @@ export default {
                     const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
                     plugin.log(`Selected file: ${file.name} (${fileSizeMB}MB)`);
                     
-                    // Check size limit
-                    const maxSize = 10 * 1024 * 1024; // 10MB
-                    
-                    // Compression if needed
+                    const maxSize = 10 * 1024 * 1024;
                     let fileToUpload = file;
                     if (file.size > maxSize) {
                         this.setState({ currentMethod: "Compressing video..." });
                         try {
                             const compressed = await this.compressVideo(file);
                             const compressedSizeMB = (compressed.size / 1024 / 1024).toFixed(2);
-                            plugin.log(`Compressed to: ${compressedSizeMB}MB`);
                             
                             if (compressed.size > maxSize) {
                                 throw new Error(`Couldn't compress below 10MB (${compressedSizeMB}MB)`);
@@ -608,12 +483,9 @@ export default {
                         }
                     }
 
-                    // Upload
                     await this.uploadToDiscord(fileToUpload);
-                    plugin.log("Upload completed successfully");
                     this.setState({ currentMethod: "Upload successful!" });
                     
-                    // Clear the success message after 3 seconds
                     setTimeout(() => {
                         this.setState({ currentMethod: "" });
                     }, 3000);
@@ -630,7 +502,6 @@ export default {
             render() {
                 const { isCompressing, currentMethod, error } = this.state;
 
-                // Improved UI with better status visibility
                 return React.createElement(
                     "div",
                     { style: { position: "relative", display: "inline-block" } },
@@ -669,14 +540,12 @@ export default {
                                 e.currentTarget.style.background = "none";
                             }
                         },
-                        // Use different emoji for different states
                         isCompressing ? 
                             (currentMethod?.includes("Compressing") ? "🔄" : 
                              currentMethod?.includes("Upload") ? "📤" : "⏳") 
                             : "🎥"
                     ),
                     
-                    // Status tooltip
                     currentMethod && React.createElement(
                         "div",
                         {
@@ -699,7 +568,6 @@ export default {
                         currentMethod
                     ),
                     
-                    // Error message
                     error && React.createElement(
                         "div",
                         {
