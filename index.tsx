@@ -1,6 +1,8 @@
 import { Plugin } from "@utils/types";
 import { findByProps } from "@webpack";
 import { React } from "@webpack/common";
+import Logger from "./Logger"; 
+
 
 interface UploadModuleOptions {
     file: File;
@@ -18,21 +20,51 @@ export default {
     intervalId: null as NodeJS.Timeout | null,
     buttonInjected: false,
     debugMode: true,
+    lastChannelId: null as string | null, // Add this to track the last active channel
 
+    log(...args: any[]) {
+        if (this.debugMode) {
+            console.log(`[${this.name}]`, ...args);
+        }
+    },
     // Plugin lifecycle methods
     start() {
-        this.log("Starting plugin...");
+        Logger.log("Starting plugin...");
         this.tryInjectButton();
 
         this.intervalId = setInterval(() => {
+            // Check if channel changed
+            const currentChannelId = this.getCurrentChannelId();
+            if (currentChannelId !== this.lastChannelId) {
+                this.log(`Channel changed: ${this.lastChannelId} -> ${currentChannelId}`);
+                this.lastChannelId = currentChannelId;
+                this.buttonInjected = false; // Reset the flag when channel changes
+            }
+            
             if (!this.buttonInjected) {
                 this.tryInjectButton();
             }
         }, 1000);
 
-        this.observer = new MutationObserver(() => {
-            if (!this.buttonInjected) {
-                this.tryInjectButton();
+        this.observer = new MutationObserver((mutations) => {
+            // Only try to inject if we detect relevant UI changes (not on every mutation)
+            for (const mutation of mutations) {
+                if (mutation.target && 
+                   (mutation.target.className?.includes?.('buttons__74017') ||
+                    mutation.target.className?.includes?.('buttons') || 
+                    mutation.target.className?.includes?.('toolbar') || 
+                    mutation.target.className?.includes?.('attach'))) {
+                    
+                    // Check if button is still present
+                    if (!document.getElementById("video-comp-btn")) {
+                        this.buttonInjected = false;
+                    }
+                    
+                    if (!this.buttonInjected) {
+                        this.tryInjectButton();
+                        break;
+                    }
+                }
             }
         });
 
@@ -44,25 +76,33 @@ export default {
         });
     },
 
-    stop() {
-        this.log("Stopping plugin...");
-        if (this.observer) {
-            this.observer.disconnect();
-            this.observer = null;
+    findButtonContainer(): Element | null {
+        // Try to find the standard Discord attachment button container
+        const container = document.querySelector('[class^="buttons_"]') || 
+                         document.querySelector('[class*=" buttons_"]') ||
+                         document.querySelector('.buttons-3JBrkn') || // Common Discord class
+                         document.querySelector('.attachButton-3JtTw3'); // Another common class
+        
+        if (container) {
+            this.log("Found button container:", container);
+            return container;
         }
-        if (this.intervalId) {
-            clearInterval(this.intervalId);
-            this.intervalId = null;
+        
+        // Fallback: Look for elements that contain attachment buttons
+        const attachmentButtons = document.querySelectorAll('button[aria-label="Attach file"]');
+        if (attachmentButtons.length > 0) {
+            // Find the parent that contains these buttons
+            for (const btn of attachmentButtons) {
+                const parent = btn.closest('div');
+                if (parent) {
+                    this.log("Found container via attachment button:", parent);
+                    return parent;
+                }
+            }
         }
-        this.removeButton();
-        this.buttonInjected = false;
-    },
-
-    // Utility methods
-    log(...args: any[]) {
-        if (this.debugMode) {
-            console.log("[VideoComp]", ...args);
-        }
+        
+        this.log("Could not find button container");
+        return null;
     },
 
     tryInjectButton() {
@@ -70,30 +110,16 @@ export default {
 
         const container = this.findButtonContainer();
         if (container) {
-            this.injectButton(container);
+            // Check if button already exists before injecting
+            if (!document.getElementById("video-comp-btn")) {
+                this.injectButton(container);
+            } else {
+                this.buttonInjected = true;
+                this.log("Button already exists, setting flag");
+            }
         } else {
             this.log("No suitable container found.");
         }
-    },
-
-    findButtonContainer(): Element | null {
-        // Updated selectors to match modern Discord UI
-        const selectors = [
-            ".buttons__74017", 
-            ".buttons-3JBrkn",
-            ".toolbar-1t6TWx",
-            ".attachWrapper-2TRKBi",
-            ".buttons-uaqb-5",
-            // More general fallback
-            "[class*='buttons-']"
-        ];
-        
-        for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) return element;
-        }
-        
-        return null;
     },
 
     injectButton(container: Element) {
@@ -101,36 +127,88 @@ export default {
             this.buttonInjected = true;
             return;
         }
-
+    
         this.log("Injecting button into:", container);
-
+        this.lastChannelId = this.getCurrentChannelId(); // Store channel ID when injecting
+    
         const btn = document.createElement("div");
         btn.id = "video-comp-btn";
         btn.style.display = "flex";
         btn.style.alignItems = "center";
-
+    
         try {
-            // Try modern React 18 createRoot first, then fallback
-            const renderMethods = findByProps("createRoot", "render") || 
-                                  findByProps("render", "hydrate") ||
-                                  window.BdApi?.React?.DOM;
-                                  
-            if (!renderMethods) {
-                console.error("[VideoComp] Could not find React render methods");
-                return;
-            }
-
-            const ButtonComponent = this.createCompressButtonComponent();
+            // Improved React render method detection with fallbacks
+            let renderMethod = null;
             
-            if (renderMethods.createRoot) {
-                renderMethods.createRoot(btn).render(React.createElement(ButtonComponent));
-            } else if (renderMethods.render) {
-                renderMethods.render(React.createElement(ButtonComponent), btn);
+            // Try to find React render methods through multiple approaches
+            const reactDOM = findByProps("render", "createRoot", "hydrate") || 
+                             findByProps("render", "hydrate") ||
+                             window.BdApi?.React?.DOM;
+            
+            // Use direct React DOM access if available in global scope
+            // This is useful in environments where webpack modules might be structured differently
+            const globalReactDOM = window.ReactDOM || window._?._reactDom || window.__REACT_DOM__;
+            
+            if (reactDOM?.createRoot) {
+                this.log("Using React 18 createRoot");
+                renderMethod = (component: React.ReactElement, container: Element) => {
+                    reactDOM.createRoot(container).render(component);
+                };
+            } else if (reactDOM?.render) {
+                this.log("Using React render");
+                renderMethod = (component: React.ReactElement, container: Element) => {
+                    reactDOM.render(component, container);
+                };
+            } else if (globalReactDOM?.render) {
+                this.log("Using global ReactDOM");
+                renderMethod = (component: React.ReactElement, container: Element) => {
+                    globalReactDOM.render(component, container);
+                };
+            } else if (window.BdApi?.React?.createElement && window.BdApi?.ReactDOM?.render) {
+                // BetterDiscord specific fallback
+                this.log("Using BdApi render methods");
+                renderMethod = (component: React.ReactElement, container: Element) => {
+                    window.BdApi.ReactDOM.render(component, container);
+                };
             } else {
-                console.error("[VideoComp] Couldn't find a way to render the component");
-                return;
+                // Last resort: try to render using basic DOM operations
+                this.log("No React render methods found, using DOM fallback");
+                const ButtonComponent = this.createCompressButtonComponent();
+                const instance = new ButtonComponent({});
+                
+                if (typeof instance.render === 'function') {
+                    // Create a button manually
+                    const manualBtn = document.createElement('button');
+                    manualBtn.textContent = "🎥";
+                    manualBtn.title = "Compress & upload video";
+                    manualBtn.style.background = "none";
+                    manualBtn.style.border = "none";
+                    manualBtn.style.color = "var(--interactive-normal)";
+                    manualBtn.style.padding = "8px";
+                    manualBtn.style.margin = "0 2px";
+                    manualBtn.style.borderRadius = "4px";
+                    manualBtn.style.cursor = "pointer";
+                    manualBtn.style.fontSize = "20px";
+                    manualBtn.style.height = "44px";
+                    manualBtn.style.width = "44px";
+                    
+                    manualBtn.addEventListener('click', instance.handleClick);
+                    btn.appendChild(manualBtn);
+                    container.prepend(btn);
+                    this.buttonInjected = true;
+                    this.log("Button injected using DOM fallback");
+                    return;
+                }
+                
+                throw new Error("Could not find any viable render method");
             }
-
+    
+            const ButtonComponent = this.createCompressButtonComponent();
+            renderMethod(
+                React.createElement(ButtonComponent),
+                btn
+            );
+    
             container.prepend(btn);
             this.buttonInjected = true;
             this.log("Button injected successfully.");
@@ -201,40 +279,41 @@ export default {
                     video.src = URL.createObjectURL(file);
                     video.muted = true;
                     video.playsInline = true;
-
+            
                     // Error handlers
                     video.onerror = () => {
                         reject(new Error("Failed to load video file"));
                         URL.revokeObjectURL(video.src);
                     };
-
+            
                     video.onloadedmetadata = () => {
-                        // Calculate dimensions while maintaining aspect ratio
-                        const maxWidth = 1280;
-                        const maxHeight = 720;
+                        // Calculate dimensions - more aggressive downscaling for speed
+                        const targetWidth = 1920;  // 480p width
+                        const targetHeight = 720; // 480p height
                         let width = video.videoWidth;
                         let height = video.videoHeight;
-
-                        if (width > maxWidth || height > maxHeight) {
-                            const ratio = Math.min(maxWidth / width, maxHeight / height);
-                            width = Math.floor(width * ratio);
-                            height = Math.floor(height * ratio);
-                        }
-
+            
+                        // Maintain aspect ratio
+                        const ratio = Math.min(targetWidth / width, targetHeight / height);
+                        width = Math.floor(width * ratio);
+                        height = Math.floor(height * ratio);
+            
+                        plugin.log(`Original: ${video.videoWidth}x${video.videoHeight}, Compressed: ${width}x${height}`);
+            
                         // Set up canvas
                         const canvas = document.createElement("canvas");
                         canvas.width = width;
                         canvas.height = height;
-                        const ctx = canvas.getContext("2d");
+                        const ctx = canvas.getContext("2d", { alpha: false }); // alpha: false for speed
                         if (!ctx) {
                             reject(new Error("Could not get canvas context"));
                             return;
                         }
-
+                        
                         // Try different codecs and find what's supported
                         let mimeType = "";
                         const codecs = [
-                            "video/webm;codecs=vp9",
+                            "video/webm;codecs=vp9", // Prefer VP9 for better quality/size ratio
                             "video/webm;codecs=vp8",
                             "video/webm",
                             "video/mp4"
@@ -251,37 +330,53 @@ export default {
                             reject(new Error("No supported video codec found in this browser"));
                             return;
                         }
-
+            
                         plugin.log(`Using codec: ${mimeType}`);
-
-                        // Set up MediaRecorder with supported codec
-                        const stream = canvas.captureStream(30); // 25 FPS
+            
+                        // Calculate optimal bitrate based on resolution - lower bitrate = faster encoding
+                        const pixelCount = width * height;
+                        const videoBitsPerSecond = Math.min(
+                            // Base bitrate on resolution - lower resolution = lower bitrate needed
+                            Math.max(500000, Math.floor(pixelCount * 0.2)),
+                            1500000 // Cap at 1.5 Mbps for Discord optimization
+                        );
+                        
+                        plugin.log(`Using bitrate: ${videoBitsPerSecond/1000}kbps`);
+            
+                        // Optimize playback rate for faster processing - speeds up compression
+                        const playbackRate = 1.5; // Process video faster
+                        video.playbackRate = playbackRate;
+                        
+                        // Lower framerate for faster processing
+                        const fps = 25; // Down from 30
+                        
+                        // Set up MediaRecorder with optimized settings
+                        const stream = canvas.captureStream(fps);
                         const recorder = new MediaRecorder(stream, {
                             mimeType,
-                            videoBitsPerSecond: 2000000 // 1.5 Mbps
+                            videoBitsPerSecond // Reduced bitrate
                         });
-
+            
                         const chunks: Blob[] = [];
                         recorder.ondataavailable = (e) => {
                             if (e.data.size > 0) {
                                 chunks.push(e.data);
-                                plugin.log(`Chunk received: ${e.data.size} bytes`);
                             }
                         };
-
+            
                         recorder.onstop = () => {
                             if (chunks.length === 0) {
                                 reject(new Error("No video data was recorded"));
                                 return;
                             }
-
+            
                             const fileType = mimeType.startsWith("video/webm") ? "webm" : "mp4";
                             const blob = new Blob(chunks, { type: mimeType });
                             if (blob.size === 0) {
                                 reject(new Error("Compressed video is 0 bytes"));
                                 return;
                             }
-
+            
                             resolve(new File(
                                 [blob],
                                 `compressed_${file.name.replace(/\.[^/.]+$/, "")}.${fileType}`,
@@ -289,16 +384,19 @@ export default {
                             ));
                             URL.revokeObjectURL(video.src);
                         };
-
+            
                         recorder.onerror = (e) => {
                             reject(new Error(`MediaRecorder error: ${e}`));
                         };
-
-                        // Start recording
-                        recorder.start(100); // Collect data every 100ms
-
-                        // Draw video frames
+            
+                        // Use larger chunks for fewer processing operations
+                        recorder.start(500); // Collect data every 500ms instead of 100ms
+            
+                        // Optimize frame drawing for speed
+                        let frameCount = 0;
+                        const frameSkip = 1; // Process every other frame
                         let animationFrameId: number;
+                        
                         const drawFrame = () => {
                             try {
                                 if (video.paused || video.ended) {
@@ -307,21 +405,26 @@ export default {
                                     return;
                                 }
                                 
-                                ctx.drawImage(video, 0, 0, width, height);
+                                // Skip frames for faster processing
+                                frameCount++;
+                                if (frameCount % frameSkip === 0) {
+                                    ctx.drawImage(video, 0, 0, width, height);
+                                }
+                                
                                 animationFrameId = requestAnimationFrame(drawFrame);
                             } catch (err) {
                                 cancelAnimationFrame(animationFrameId);
                                 reject(new Error(`Error drawing video frame: ${err}`));
                             }
                         };
-
+            
                         // Start playback
                         video.play().catch(err => {
                             reject(new Error(`Video play failed: ${err}`));
                         });
-
+            
                         drawFrame();
-
+            
                         // Stop conditions
                         video.onended = () => {
                             cancelAnimationFrame(animationFrameId);
@@ -333,8 +436,13 @@ export default {
                                 plugin.log("Error stopping recorder:", e);
                             }
                         };
-
-                        // Safety timeout (max 30 seconds)
+            
+                        // Adaptive safety timeout
+                        const safetyTimeout = Math.min(
+                            Math.max((video.duration / playbackRate) * 1000 * 1.2, 30000), // 1.2x adjusted playback time
+                            180000 // Max 3 minutes
+                        );
+                        
                         setTimeout(() => {
                             if (recorder.state === "recording") {
                                 cancelAnimationFrame(animationFrameId);
@@ -344,7 +452,7 @@ export default {
                                     plugin.log("Error stopping recorder:", e);
                                 }
                             }
-                        }, 30000);
+                        }, safetyTimeout);
                     };
                 });
             }
