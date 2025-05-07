@@ -1,45 +1,36 @@
-# VideoComp Discord Plugin
+# 🎥 VideoComp — Vencord Plugin for Discord Video Compression
 
-A simple plugin that adds a button to compress and upload videos under 10MB directly in Discord.
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Status](https://img.shields.io/badge/status-stable-brightgreen)
+![Built With](https://img.shields.io/badge/built_with-TypeScript-blueviolet)
 
-## Features
+> 🧩 A lightweight Vencord plugin that automatically compresses videos over 10MB using MediaRecorder, keeping your uploads Discord-friendly.
 
-- One-click video compression and upload
-- Automatic resizing to 1080p resolution
-- Fixed 500kbps bitrate for optimal compression
-- Visual upload progress indicators
-- Error handling with user feedback
+---
 
-## Installation
+## ✨ Features
 
-1. Install a Discord client mod that supports plugins (BetterDiscord/Vencord/Replugged)
-2. Add this plugin to your plugins folder
-3. Restart Discord
+- 📼 Compress videos >10MB before upload
+- ⚡ Seamless integration with Discord’s input bar
+- 💾 Uses MediaRecorder API for fast in-browser encoding
+- 🎯 Target size: under 10MB for non-Nitro users
+- 🛠️ Customizable compression settings (coming soon)
 
-## Usage
+---
 
-1. Click the 🎥 button in the message input area
-2. Select a video file (any size)
-3. The plugin will automatically:
-   - Compress videos over 10MB
-   - Resize to 1080p while maintaining aspect ratio
-   - Upload the compressed video
+## 🖥️ Preview
 
-## Technical Details
+![Plugin Preview](https://cdn.discordapp.com/attachments/1135171678171832322/1369797997483004025/Untitled.png?ex=681d2b4c&is=681bd9cc&hm=d4c704b2aeae1c4a6f373d039e091f56c59419e530c2618ba221d808a0855c24&) 
+---
 
-- Compression uses browser's built-in MediaRecorder API
-- Default settings:
-  - Resolution: 1080p (height)
-  - Bitrate: 500kbps
-  - Target format: WebM (falls back to MP4 if unavailable)
-- Uploads use Discord's native API
+## 🚀 Installation
 
-## Troubleshooting
+### 🧱 Prerequisites
+- [Vencord](https://vencord.dev) installed
 
-- If uploads fail, check your connection and try smaller videos
-- For compression issues, try different video formats
-- The plugin logs to console (accessible via Ctrl+Shift+I)
+### 📦 Steps
 
-## Disclaimer
-
-This plugin is not affiliated with Discord. Use at your own risk.
+1. Open Vencord **"userplugins"** folder
+2. Clone this repository:
+   ```bash
+   git clone https://github.com/yourusername/videocomp.git
