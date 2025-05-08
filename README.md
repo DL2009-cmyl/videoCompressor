@@ -33,4 +33,4 @@
 1. Open Vencord **"userplugins"** folder
 2. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/videocomp.git
+   git clone https://github.com/DL2009-cmyl/videoCompressor.git
